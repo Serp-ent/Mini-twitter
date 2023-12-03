@@ -7,14 +7,14 @@
 #include <sys/sem.h>
 #include <sys/shm.h>
 
-#define UZYT_ROZMIAR 32
-#define WPIS_ROZMIAR 64
+#define USERNAME_SIZE 32
+#define POST_SIZE 64
 
-struct record {
-    char uzytkownik[UZYT_ROZMIAR];
-    char wpis[WPIS_ROZMIAR];
-    int polubienia;
-}* wpisy;
+struct Record {
+    char username[USERNAME_SIZE];
+    char post[POST_SIZE];
+    int likes;
+};
 
 int readline(char* buff, int size) {
     fgets(buff, size, stdin);
@@ -24,80 +24,84 @@ int readline(char* buff, int size) {
     return len;
 }
 
+void usage(const char* progname) {
+    fprintf(stderr, "usage: %s <key> <username>\n", progname);
+    exit(1);
+}
+
 int main(int argc, char* argv[]) {
     int shmid;
     int semid;
-    key_t klucz;   // klucz pamieci wspoldzielonej
-    key_t klucz1;  // klucz semafory
+    key_t shmkey;  // klucz pamieci wspoldzielonej
+    key_t semkey;  // klucz semafory
 
-    char akcja;
-    int* rozmiar;
-    int* max;
+    char action;
+    int* size;
+    int* capacity;
 
-    struct sembuf zamow_rozmiar = {0, -1, 0};
-    struct sembuf zwolnij_rozmiar = {0, 1, 0};
-    struct sembuf zamow = {0, -1, 0};
-    struct sembuf zwolnij = {0, 1, 0};
+    struct sembuf alloc_size = {0, -1, 0};
+    struct sembuf free_size = {0, 1, 0};
+    struct sembuf alloc_post = {0, -1, 0};
+    struct sembuf free_post = {0, 1, 0};
 
-    struct record* wpisy;
+    struct Record* records;
     if (argc != 3) {
-        fprintf(stderr, "uzycie: %s <klucz> <nazwa uzytkownika>\n", argv[0]);
-        exit(1);
+        usage(argv[0]);
     }
 
-    if ((klucz = ftok(argv[1], 1)) == -1) {
+    if ((shmkey = ftok(argv[1], 1)) == -1) {
         perror("Nie udalo sie wygenerowac klucza");
         exit(1);
     }
 
-    if ((shmid = shmget(klucz, 0, 0)) == -1) {
-        perror("Nie udalo sie utworzyc segment pamieci dzielonej");
+    if ((shmid = shmget(shmkey, 0, 0)) == -1) {
+        perror("Nie udalo sie uzyskac id segmentu pamieci dzielonej");
         exit(1);
     }
 
-    if ((rozmiar = shmat(shmid, NULL, 0)) == (void*)-1) {
+    if ((size = shmat(shmid, NULL, 0)) == (void*)-1) {
         perror("Nie mozna dolaczyc pamieci");
         exit(1);
     }
-    max = rozmiar + sizeof(int);
-    wpisy = (void*)max + sizeof(int);
-    zamow_rozmiar.sem_num = zwolnij_rozmiar.sem_num = *max;
+    capacity = size + sizeof(int);
+    records = (void*)capacity + sizeof(int);
+    alloc_size.sem_num = free_size.sem_num = *capacity;
 
-    if ((klucz1 = ftok(argv[1], 2)) == -1) {
+    if ((semkey = ftok(argv[1], 2)) == -1) {
         perror("Nie udalo sie wygenerowac klucza");
         exit(1);
     }
-    if ((semid = semget(klucz1, 0, 0)) == -1) {
+    if ((semid = semget(semkey, 0, 0)) == -1) {
         perror("Nie mozna uzyskac dostepu do semafory");
         exit(1);
     }
 
     printf("Twitter 2.0 wita! (WERSJA A)\n");
 
-    if (semop(semid, &zamow_rozmiar, 1)) {
+    if (semop(semid, &alloc_size, 1)) {
         perror("Nie mozna zajac zasobu");
         exit(1);
     }
 
-    printf("[Wolnych %d wpisow (na %d)]\n", *max - *rozmiar, *max);
-    int size = *rozmiar;  // zapisz do lokalnej zmiennej
+    printf("[Wolnych %d wpisow (na %d)]\n", *capacity - *size, *capacity);
+    int local_size = *size;  // zapisz do lokalnej zmiennej
 
-    if (semop(semid, &zwolnij_rozmiar, 1) == -1) {
+    if (semop(semid, &free_size, 1) == -1) {
         perror("Nie mozna zwolnic zasobu");
         exit(1);
     }
 
-    for (int i = 0; i < size; ++i) {
-        zamow.sem_num = zwolnij.sem_num = i;
-        if (semop(semid, &zamow, 1)) {
+    for (int i = 0; i < local_size; ++i) {
+        alloc_post.sem_num = free_post.sem_num = i;
+        if (semop(semid, &alloc_post, 1)) {
             perror("Nie mozna zajac zasobu");
             exit(1);
         }
 
-        printf("%d. %s [Autor: %s, Polubienia: %d]\n", i + 1, wpisy[i].wpis,
-               wpisy[i].uzytkownik, wpisy[i].polubienia);
+        printf("%d. %s [Autor: %s, Polubienia: %d]\n", i + 1, records[i].post,
+               records[i].username, records[i].likes);
 
-        if (semop(semid, &zwolnij, 1) == -1) {
+        if (semop(semid, &free_post, 1) == -1) {
             perror("Nie mozna zwolnic zasobu");
             exit(1);
         }
@@ -105,71 +109,69 @@ int main(int argc, char* argv[]) {
 
     printf("Podaj akcje (N)owy wpis, (L)ike\n");
     printf("> ");
-    scanf(" %c", &akcja);
+    scanf(" %c", &action);
     while (getchar() != '\n')  // ignoruj znaki az do wejscia
         ;
 
-    if (akcja == 'N' || akcja == 'n') {
-        char buff[WPIS_ROZMIAR];
-        printf("Napisz co ci chodzi po glowie:\n");
-        printf("> ");
-        readline(buff, WPIS_ROZMIAR);
+    if (action == 'N' || action == 'n') {
+        char buff[POST_SIZE];
+        printf("Napisz co ci chodzi po glowie:\n> ");
+        readline(buff, POST_SIZE);
 
-        if (semop(semid, &zamow_rozmiar, 1)) {
+        if (semop(semid, &alloc_size, 1)) {
             perror("Nie mozna zajac zasobu");
             exit(1);
         }
 
-        if (*rozmiar == *max) {
+        if (*size == *capacity) {
             fprintf(stderr, "Brak miejsca na nowe wiadomosci\n");
         } else {
-            zamow.sem_num = zwolnij.sem_num = *rozmiar;
-            if (semop(semid, &zamow, 1) == -1) {
+            alloc_post.sem_num = free_post.sem_num = *size;
+            if (semop(semid, &alloc_post, 1) == -1) {
                 perror("Nie mozna zwolnic zasobu");
                 exit(1);
             }
-            strncpy(wpisy[*rozmiar].uzytkownik, argv[2], UZYT_ROZMIAR);
-            strncpy(wpisy[*rozmiar].wpis, buff, WPIS_ROZMIAR);
-            wpisy[*rozmiar].polubienia = 0;
+            strncpy(records[*size].username, argv[2], USERNAME_SIZE);
+            strncpy(records[*size].post, buff, POST_SIZE);
+            records[*size].likes = 0;
 
-            ++(*rozmiar);
-            if (semop(semid, &zwolnij, 1) == -1) {
+            ++(*size);
+            if (semop(semid, &free_post, 1) == -1) {
                 perror("Nie mozna zwolnic zasobu");
                 exit(1);
             }
         }
 
-        if (semop(semid, &zwolnij_rozmiar, 1) == -1) {
+        if (semop(semid, &free_size, 1) == -1) {
             perror("Nie mozna zwolnic zasobu");
             exit(1);
         }
 
-    } else if (akcja == 'L' || akcja == 'l') {
-        int wpis;
-        printf("Ktory wpis chcesz polubic\n");
-        printf("> ");
-        scanf(" %d", &wpis);
-        wpis -= 1;  // komputery indexuja od 0
+    } else if (action == 'L' || action == 'l') {
+        int post_index;
+        printf("Ktory wpis chcesz polubic\n> ");
+        scanf(" %d", &post_index);
+        post_index -= 1;  // C arrays are 0 indexed
 
-        if (semop(semid, &zamow_rozmiar, 1)) {
+        if (semop(semid, &alloc_size, 1)) {
             perror("Nie mozna zajac zasobu");
             exit(1);
         }
-        if (wpis >= *rozmiar || wpis < 0) {
+        if (post_index >= *size || post_index < 0) {
             printf("Nie ma wpisu o takim indexie\n");
         } else {
-            zamow.sem_num = zwolnij.sem_num = wpis;
-            if (semop(semid, &zamow, 1)) {
+            alloc_post.sem_num = free_post.sem_num = post_index;
+            if (semop(semid, &alloc_post, 1)) {
                 perror("Nie mozna zajac zasobu");
                 exit(1);
             }
-            ++wpisy[wpis].polubienia;
-            if (semop(semid, &zwolnij, 1)) {
+            ++records[post_index].likes;
+            if (semop(semid, &free_post, 1)) {
                 perror("Nie mozna zajac zasobu");
                 exit(1);
             }
         }
-        if (semop(semid, &zwolnij_rozmiar, 1) == -1) {
+        if (semop(semid, &free_size, 1) == -1) {
             perror("Nie mozna zwolnic zasobu");
             exit(1);
         }

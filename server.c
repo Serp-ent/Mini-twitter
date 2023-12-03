@@ -8,65 +8,65 @@
 #include <sys/shm.h>
 #include <sys/types.h>
 
-#define UZYT_ROZMIAR 32
-#define WPIS_ROZMIAR 64
+#define USERNAME_SIZE 32
+#define POST_SIZE 64
 
-int* rozmiar;
-int* max;
-struct record {
-    char uzytkownik[UZYT_ROZMIAR];
-    char wpis[WPIS_ROZMIAR];
-    int polubienia;
-}* wpisy;
+int* size;
+int* capacity;
+struct Record {
+    char username[USERNAME_SIZE];
+    char post[POST_SIZE];
+    int likes;
+}* records;
 
 int shmid;
 int semid;
 
-void sigstop_wypisz_wpisy(int sig) {
+void print_posts(int sig) {
+    struct sembuf alloc_size = {*capacity, -1, 0};
+    struct sembuf free_size = {*capacity, 1, 0};
+    struct sembuf alloc_record = {0, -1, 0};
+    struct sembuf free_record = {0, 1, 0};
+
     printf("\n");
 
-    struct sembuf zamow_rozmiar = {*max, -1, 0};
-    struct sembuf zwolnij_rozmiar = {*max, 1, 0};
-    struct sembuf zamow = {0, -1, 0};
-    struct sembuf zwolnij = {0, 1, 0};
-
-    if (semop(semid, &zamow_rozmiar, 1) == -1) {
+    if (semop(semid, &alloc_size, 1) == -1) {
         perror("Nie mozna zajac zasobu");
         return;
     }
 
-    if (*rozmiar == 0) {
+    if (*size == 0) {
         printf("Brak wpisow\n");
     } else {
-        printf("___________  Twitter 2.0:  ___________\n");
-        for (int i = 0; i < *rozmiar; ++i) {
-            zamow.sem_num = zwolnij.sem_num = i;
+        printf("_____________  Twitter 2.0:  _____________\n");
+        for (int i = 0; i < *size; ++i) {
+            alloc_record.sem_num = free_record.sem_num = i;
 
-            if (semop(semid, &zamow, 1) == -1) {
+            if (semop(semid, &alloc_record, 1) == -1) {
                 perror("Nie mozna zwolnic zasobu");
                 return;
             }
 
             printf("%d. [%s]: %s [Polubienia: %d]\n", i + 1,
-                   wpisy[i].uzytkownik, wpisy[i].wpis, wpisy[i].polubienia);
+                   records[i].username, records[i].post, records[i].likes);
 
-            if (semop(semid, &zwolnij, 1) == -1) {
+            if (semop(semid, &free_record, 1) == -1) {
                 perror("Nie mozna zwolnic zasobu");
                 return;
             }
         }
     }
 
-    if (semop(semid, &zwolnij_rozmiar, 1) == -1) {
+    if (semop(semid, &free_size, 1) == -1) {
         perror("Nie mozna zwolnic zasobu");
         return;
     }
 }
 
-void sigint_cleanup(int sig) {
+void cleanup(int sig) {
     printf("[SERWER]: dostalem SIGINT => koncze i sprzatam... ");
     printf("odlaczanie: %s, usuniecie: %s\n",
-           (shmdt(rozmiar) == 0) ? "OK" : strerror(errno),
+           (shmdt(size) == 0) ? "OK" : strerror(errno),
            (shmctl(shmid, IPC_RMID, 0) == 0) ? "OK" : strerror(errno));
     printf("usuwanie semafor: %s\n",
            (semctl(semid, IPC_RMID, 0) == 0) ? "OK" : strerror(errno));
@@ -82,14 +82,14 @@ union semun {
 };
 
 int main(int argc, char* argv[]) {
-    key_t klucz;   // klucz pamieci wspoldzielonej
-    key_t klucz1;  // klucz semafory
+    key_t shmkey;  // klucz pamieci wspoldzielonej
+    key_t semkey;  // klucz semafory
     int n;
-    struct shmid_ds shmd;
-    union semun wartosc;
+    struct shmid_ds shmds;
+    union semun semval;
 
-    signal(SIGTSTP, sigstop_wypisz_wpisy);
-    signal(SIGINT, sigint_cleanup);
+    signal(SIGTSTP, print_posts);
+    signal(SIGINT, cleanup);
 
     if (argc != 3) {
         fprintf(stderr, "uzycie: %s, <klucz> <liczba wpisow>\n", argv[0]);
@@ -105,61 +105,61 @@ int main(int argc, char* argv[]) {
 
     printf("[SERWER]: Twitter 2.0 (Wersja A)\n");
     printf("[SERWER]: tworze klucz na podstawie pliku %s... ", argv[1]);
-    klucz = ftok(argv[1], 1);
-    if (klucz == -1) {
+    shmkey = ftok(argv[1], 1);
+    if (shmkey == -1) {
         perror("Nie udalo sie wygenerowac klucza");
         exit(1);
     }
-    printf("OK (klucz: %d)\n", klucz);
+    printf("OK (klucz: %d)\n", shmkey);
 
-    klucz1 = ftok(argv[1], 2);
-    if (klucz1 == -1) {
+    semkey = ftok(argv[1], 2);
+    if (semkey == -1) {
         perror("Nie udalo sie wygenerowac klucza");
-        sigint_cleanup(0);
+        cleanup(0);
     }
 
     // jeden wiecej dla kontrolowania rozmiaru i pojemnosci
-    if ((semid = semget(klucz1, n + 1, 0666 | IPC_CREAT)) == -1) {
+    if ((semid = semget(semkey, n + 1, 0666 | IPC_CREAT)) == -1) {
         perror("Nie mozna utworzyc zbioru semafor");
-        sigint_cleanup(0);
+        cleanup(0);
     }
 
-    wartosc.val = 1;
+    semval.val = 1;
     for (int i = 0; i < n + 1; ++i) {  // + 1 zeby zainicjalizowac tez rozmiar
-        if (semctl(semid, i, SETVAL, wartosc) == -1) {
+        if (semctl(semid, i, SETVAL, semval) == -1) {
             perror("Nie mozna zainicjalizowac semafory");
-            sigint_cleanup(0);
+            cleanup(0);
         }
     }
 
     printf("[SERWER]: Tworze segment pamieci wspolnej na %d wpisow po %lub... ",
-           n, sizeof(struct record));
-    shmid =
-        shmget(klucz, sizeof(int) * 2 + sizeof(*wpisy) * n, IPC_CREAT | 0666);
+           n, sizeof(struct Record));
+    shmid = shmget(shmkey, sizeof(int) * 2 + sizeof(*records) * n,
+                   IPC_CREAT | 0666);
     if (shmid == -1) {
         perror("Nie udalo sie utworzyc segment pamieci dzielonej");
         exit(1);
     }
 
     // zaladuj informacje a segmencie pamieci dzielonej
-    if (shmctl(shmid, IPC_STAT, &shmd) == -1) {
+    if (shmctl(shmid, IPC_STAT, &shmds) == -1) {
         perror("Nie mozna odczytac informacji o pamieci wspoldzielonej");
-        sigint_cleanup(0);
+        cleanup(0);
     }
-    printf("OK (id: %d, rozmiar: %ld)\n", shmid, shmd.shm_segsz);
+    printf("OK (id: %d, rozmiar: %ld)\n", shmid, shmds.shm_segsz);
 
     printf("[SERWER]: dolaczam pamiec wspolna... ");
-    rozmiar = shmat(shmid, NULL, 0);
-    max = rozmiar + sizeof(int);
-    wpisy = (void*)max + sizeof(int);
+    size = shmat(shmid, NULL, 0);
+    capacity = size + sizeof(int);
+    records = (void*)capacity + sizeof(int);
 
-    if (wpisy == (void*)-1) {
+    if (records == (void*)-1) {
         perror("Nie mozna dolaczyc segmentu pamieci");
-        sigint_cleanup(0);
+        cleanup(0);
     }
-    *max = n;  // ustaw pojemnosc twittera
+    *capacity = n;  // ustaw pojemnosc twittera
 
-    printf("OK (adres: %lu)\n", (long)wpisy);
+    printf("OK (adres: %lu)\n", (long)records);
     printf("[SERWER]: nacisnij Ctrl^Z by wyswietlic stan serwisu\n");
     printf("[SERWER]: nacisnij Ctrl^C by zakonczyc program\n");
 
