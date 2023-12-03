@@ -16,6 +16,12 @@ struct Record {
     int likes;
 };
 
+struct Twitter {
+    int size;
+    int capacity;
+    struct Record posts[];
+}* twitter;
+
 /* reads line without new line character to buff (at most size - 1 characters)
 returns length of string that was read */
 int readline(char* buff, int size) {
@@ -40,15 +46,13 @@ int main(int argc, char* argv[]) {
     int i;
 
     char action;
-    int* size;
-    int* capacity;
 
     struct sembuf alloc_size = {0, -1, 0};
     struct sembuf free_size = {0, 1, 0};
     struct sembuf alloc_post = {0, -1, 0};
     struct sembuf free_post = {0, 1, 0};
 
-    struct Record* records;
+    struct Twitter* twitter;
     if (argc != 3) {
         usage(argv[0]);
     }
@@ -63,13 +67,11 @@ int main(int argc, char* argv[]) {
         exit(1);
     }
 
-    if ((size = shmat(shmid, NULL, 0)) == (void*)-1) {
+    if ((twitter = shmat(shmid, NULL, 0)) == (void*)-1) {
         perror("Nie mozna dolaczyc pamieci");
         exit(1);
     }
-    capacity = size + sizeof(int);
-    records = (void*)capacity + sizeof(int);
-    alloc_size.sem_num = free_size.sem_num = *capacity;
+    alloc_size.sem_num = free_size.sem_num = twitter->capacity;
 
     if ((semkey = ftok(argv[1], 2)) == -1) {
         perror("Nie udalo sie wygenerowac klucza");
@@ -87,8 +89,9 @@ int main(int argc, char* argv[]) {
         exit(1);
     }
 
-    printf("[Wolnych %d wpisow (na %d)]\n", *capacity - *size, *capacity);
-    int local_size = *size; /* save to local variable */
+    printf("[Wolnych %d wpisow (na %d)]\n", twitter->capacity - twitter->size,
+           twitter->capacity);
+    int local_size = twitter->size; /* save to local variable */
 
     if (semop(semid, &free_size, 1) == -1) {
         perror("Nie mozna zwolnic zasobu");
@@ -102,8 +105,9 @@ int main(int argc, char* argv[]) {
             exit(1);
         }
 
-        printf("%d. %s [Autor: %s, Polubienia: %d]\n", i + 1, records[i].post,
-               records[i].username, records[i].likes);
+        printf("%d. %s [Autor: %s, Polubienia: %d]\n", i + 1,
+               twitter->posts[i].post, twitter->posts[i].username,
+               twitter->posts[i].likes);
 
         if (semop(semid, &free_post, 1) == -1) {
             perror("Nie mozna zwolnic zasobu");
@@ -127,19 +131,20 @@ int main(int argc, char* argv[]) {
             exit(1);
         }
 
-        if (*size == *capacity) {
+        if (twitter->size == twitter->capacity) {
             fprintf(stderr, "Brak miejsca na nowe wiadomosci\n");
         } else {
-            alloc_post.sem_num = free_post.sem_num = *size;
+            alloc_post.sem_num = free_post.sem_num = twitter->size;
             if (semop(semid, &alloc_post, 1) == -1) {
                 perror("Nie mozna zwolnic zasobu");
                 exit(1);
             }
-            strncpy(records[*size].username, argv[2], USERNAME_SIZE);
-            strncpy(records[*size].post, buff, POST_SIZE);
-            records[*size].likes = 0;
+            strncpy(twitter->posts[twitter->size].username, argv[2],
+                    USERNAME_SIZE);
+            strncpy(twitter->posts[twitter->size].post, buff, POST_SIZE);
+            twitter->posts[twitter->size].likes = 0;
 
-            ++(*size);
+            ++twitter->size;
             if (semop(semid, &free_post, 1) == -1) {
                 perror("Nie mozna zwolnic zasobu");
                 exit(1);
@@ -161,7 +166,7 @@ int main(int argc, char* argv[]) {
             perror("Nie mozna zajac zasobu");
             exit(1);
         }
-        if (post_index >= *size || post_index < 0) {
+        if (post_index >= twitter->size || post_index < 0) {
             printf("Nie ma wpisu o takim indexie\n");
         } else {
             alloc_post.sem_num = free_post.sem_num = post_index;
@@ -169,7 +174,7 @@ int main(int argc, char* argv[]) {
                 perror("Nie mozna zajac zasobu");
                 exit(1);
             }
-            ++records[post_index].likes;
+            ++twitter->posts[post_index].likes;
             if (semop(semid, &free_post, 1)) {
                 perror("Nie mozna zajac zasobu");
                 exit(1);

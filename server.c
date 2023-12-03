@@ -11,20 +11,24 @@
 #define USERNAME_SIZE 32
 #define POST_SIZE 64
 
-int* size;
-int* capacity;
 struct Record {
     char username[USERNAME_SIZE];
     char post[POST_SIZE];
     int likes;
-}* records;
+};
+
+struct Twitter {
+    int size;
+    int capacity;
+    struct Record posts[];
+}* twitter;
 
 int shmid;
 int semid;
 
 void print_posts(int sig) {
-    struct sembuf alloc_size = {*capacity, -1, 0};
-    struct sembuf free_size = {*capacity, 1, 0};
+    struct sembuf alloc_size = {twitter->capacity, -1, 0};
+    struct sembuf free_size = {twitter->capacity, 1, 0};
     struct sembuf alloc_record = {0, -1, 0};
     struct sembuf free_record = {0, 1, 0};
     int i;
@@ -36,11 +40,11 @@ void print_posts(int sig) {
         return;
     }
 
-    if (*size == 0) {
+    if (twitter->size == 0) {
         printf("Brak wpisow\n");
     } else {
         printf("_____________  Twitter 2.0:  _____________\n");
-        for (i = 0; i < *size; ++i) {
+        for (i = 0; i < twitter->size; ++i) {
             alloc_record.sem_num = free_record.sem_num = i;
 
             if (semop(semid, &alloc_record, 1) == -1) {
@@ -49,7 +53,8 @@ void print_posts(int sig) {
             }
 
             printf("%d. [%s]: %s [Polubienia: %d]\n", i + 1,
-                   records[i].username, records[i].post, records[i].likes);
+                   twitter->posts[i].username, twitter->posts[i].post,
+                   twitter->posts[i].likes);
 
             if (semop(semid, &free_record, 1) == -1) {
                 perror("Nie mozna zwolnic zasobu");
@@ -67,7 +72,7 @@ void print_posts(int sig) {
 void cleanup(int sig) {
     printf("[SERWER]: dostalem SIGINT => koncze i sprzatam... ");
     printf("odlaczanie: %s, usuniecie: %s\n",
-           (shmdt(size) == 0) ? "OK" : strerror(errno),
+           (shmdt(twitter) == 0) ? "OK" : strerror(errno),
            (shmctl(shmid, IPC_RMID, 0) == 0) ? "OK" : strerror(errno));
     printf("usuwanie semafor: %s\n",
            (semctl(semid, IPC_RMID, 0) == 0) ? "OK" : strerror(errno));
@@ -129,7 +134,7 @@ int main(int argc, char* argv[]) {
 
     semval.val = 1;
 
-    for (i = 0; i < n + 1; ++i) {  /* + 1 zeby zainicjalizowac tez rozmiar */
+    for (i = 0; i < n + 1; ++i) { /* + 1 zeby zainicjalizowac tez rozmiar */
         if (semctl(semid, i, SETVAL, semval) == -1) {
             perror("Nie mozna zainicjalizowac semafory");
             cleanup(0);
@@ -138,7 +143,7 @@ int main(int argc, char* argv[]) {
 
     printf("[SERWER]: Tworze segment pamieci wspolnej na %d wpisow po %lub... ",
            n, sizeof(struct Record));
-    shmid = shmget(shmkey, sizeof(int) * 2 + sizeof(*records) * n,
+    shmid = shmget(shmkey, sizeof(*twitter) + n * sizeof(*twitter->posts),
                    IPC_CREAT | 0666);
     if (shmid == -1) {
         perror("Nie udalo sie utworzyc segment pamieci dzielonej");
@@ -153,17 +158,14 @@ int main(int argc, char* argv[]) {
     printf("OK (id: %d, rozmiar: %ld)\n", shmid, shmds.shm_segsz);
 
     printf("[SERWER]: dolaczam pamiec wspolna... ");
-    size = shmat(shmid, NULL, 0);
-    capacity = size + sizeof(int);
-    records = (void*)capacity + sizeof(int);
-
-    if (records == (void*)-1) {
+    twitter = shmat(shmid, NULL, 0);
+    if (twitter == (void*)-1) {
         perror("Nie mozna dolaczyc segmentu pamieci");
         cleanup(0);
     }
-    *capacity = n;  /* set twitter capacity */
+    twitter->capacity = n; /* set twitter capacity */
 
-    printf("OK (adres: %lu)\n", (long)records);
+    printf("OK (adres: %lu)\n", (long)twitter);
     printf("[SERWER]: nacisnij Ctrl^Z by wyswietlic stan serwisu\n");
     printf("[SERWER]: nacisnij Ctrl^C by zakonczyc program\n");
 
