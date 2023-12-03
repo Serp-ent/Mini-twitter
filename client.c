@@ -32,6 +32,11 @@ int readline(char* buff, int size) {
     return len;
 }
 
+void sys_err(const char* errmsg) {
+    perror(errmsg);
+    exit(EXIT_FAILURE);
+}
+
 /* print usage and exit */
 void usage(const char* progname) {
     fprintf(stderr, "usage: %s <key> <username>\n", progname);
@@ -58,35 +63,29 @@ int main(int argc, char* argv[]) {
     }
 
     if ((shmkey = ftok(argv[1], 1)) == -1) {
-        perror("Nie udalo sie wygenerowac klucza");
-        exit(1);
+        sys_err("Nie udalo sie wygenerowac klucza");
     }
 
     if ((shmid = shmget(shmkey, 0, 0)) == -1) {
-        perror("Nie udalo sie uzyskac id segmentu pamieci dzielonej");
-        exit(1);
+        sys_err("Nie udalo sie uzyskac id segmentu pamieci dzielonej");
     }
 
     if ((twitter = shmat(shmid, NULL, 0)) == (void*)-1) {
-        perror("Nie mozna dolaczyc pamieci");
-        exit(1);
+        sys_err("Nie mozna dolaczyc pamieci");
     }
     alloc_size.sem_num = free_size.sem_num = twitter->capacity;
 
     if ((semkey = ftok(argv[1], 2)) == -1) {
-        perror("Nie udalo sie wygenerowac klucza");
-        exit(1);
+        sys_err("Nie udalo sie wygenerowac klucza");
     }
     if ((semid = semget(semkey, 0, 0)) == -1) {
-        perror("Nie mozna uzyskac dostepu do semafory");
-        exit(1);
+        sys_err("Nie mozna uzyskac dostepu do semafory");
     }
 
     printf("Twitter 2.0 wita! (WERSJA A)\n");
 
     if (semop(semid, &alloc_size, 1)) {
-        perror("Nie mozna zajac zasobu");
-        exit(1);
+        sys_err("Nie mozna zajac zasobu");
     }
 
     printf("[Wolnych %d wpisow (na %d)]\n", twitter->capacity - twitter->size,
@@ -94,15 +93,13 @@ int main(int argc, char* argv[]) {
     int local_size = twitter->size; /* save to local variable */
 
     if (semop(semid, &free_size, 1) == -1) {
-        perror("Nie mozna zwolnic zasobu");
-        exit(1);
+        sys_err("Nie mozna zwolnic zasobu");
     }
 
     for (i = 0; i < local_size; ++i) {
         alloc_post.sem_num = free_post.sem_num = i;
         if (semop(semid, &alloc_post, 1)) {
-            perror("Nie mozna zajac zasobu");
-            exit(1);
+            sys_err("Nie mozna zajac zasobu");
         }
 
         printf("%d. %s [Autor: %s, Polubienia: %d]\n", i + 1,
@@ -110,8 +107,7 @@ int main(int argc, char* argv[]) {
                twitter->posts[i].likes);
 
         if (semop(semid, &free_post, 1) == -1) {
-            perror("Nie mozna zwolnic zasobu");
-            exit(1);
+            sys_err("Nie mozna zwolnic zasobu");
         }
     }
 
@@ -127,8 +123,7 @@ int main(int argc, char* argv[]) {
         readline(buff, POST_SIZE);
 
         if (semop(semid, &alloc_size, 1)) {
-            perror("Nie mozna zajac zasobu");
-            exit(1);
+            sys_err("Nie mozna zajac zasobu");
         }
 
         if (twitter->size == twitter->capacity) {
@@ -136,8 +131,7 @@ int main(int argc, char* argv[]) {
         } else {
             alloc_post.sem_num = free_post.sem_num = twitter->size;
             if (semop(semid, &alloc_post, 1) == -1) {
-                perror("Nie mozna zwolnic zasobu");
-                exit(1);
+                sys_err("Nie mozna zajac zasobu");
             }
             strncpy(twitter->posts[twitter->size].username, argv[2],
                     USERNAME_SIZE);
@@ -146,14 +140,12 @@ int main(int argc, char* argv[]) {
 
             ++twitter->size;
             if (semop(semid, &free_post, 1) == -1) {
-                perror("Nie mozna zwolnic zasobu");
-                exit(1);
+                sys_err("Nie mozna zwolnic zasobu");
             }
         }
 
         if (semop(semid, &free_size, 1) == -1) {
-            perror("Nie mozna zwolnic zasobu");
-            exit(1);
+            sys_err("Nie mozna zwolnic zasobu");
         }
 
     } else if (action == 'L' || action == 'l') {
@@ -163,26 +155,22 @@ int main(int argc, char* argv[]) {
         post_index -= 1; /* C arrays are 0 indexed */
 
         if (semop(semid, &alloc_size, 1)) {
-            perror("Nie mozna zajac zasobu");
-            exit(1);
+            sys_err("Nie mozna zajac zasobu");
         }
         if (post_index >= twitter->size || post_index < 0) {
             printf("Nie ma wpisu o takim indexie\n");
         } else {
             alloc_post.sem_num = free_post.sem_num = post_index;
             if (semop(semid, &alloc_post, 1)) {
-                perror("Nie mozna zajac zasobu");
-                exit(1);
+                sys_err("Nie mozna zajac zasobu");
             }
             ++twitter->posts[post_index].likes;
             if (semop(semid, &free_post, 1)) {
-                perror("Nie mozna zajac zasobu");
-                exit(1);
+                sys_err("Nie mozna zwolnic zasobu");
             }
         }
         if (semop(semid, &free_size, 1) == -1) {
-            perror("Nie mozna zwolnic zasobu");
-            exit(1);
+            sys_err("Nie mozna zwolnic zasobu");
         }
 
     } else {

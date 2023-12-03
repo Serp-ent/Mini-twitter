@@ -23,6 +23,27 @@ struct Twitter {
     struct Record posts[];
 }* twitter;
 
+/* this structure was copied from semctl(2) manual */
+union semun {
+    int val;               /* Value for SETVAL */
+    struct semid_ds* buf;  /* Buffer for IPC_STAT, IPC_SET */
+    unsigned short* array; /* Array for GETALL, SETALL */
+    struct seminfo* __buf; /* Buffer for IPC_INFO
+                              (Linux-specific) */
+};
+
+void cleanup(int sig);
+
+void sys_err(const char* errmsg) {
+    perror(errmsg);
+    exit(EXIT_FAILURE);
+}
+
+void sys_err_with_cleanup(const char* errmsg) {
+    perror(errmsg);
+    cleanup(0);
+}
+
 int shmid;
 int semid;
 
@@ -79,15 +100,6 @@ void cleanup(int sig) {
     exit(0);
 }
 
-/* this structure was copied from semctl(2) manual */
-union semun {
-    int val;               /* Value for SETVAL */
-    struct semid_ds* buf;  /* Buffer for IPC_STAT, IPC_SET */
-    unsigned short* array; /* Array for GETALL, SETALL */
-    struct seminfo* __buf; /* Buffer for IPC_INFO
-                              (Linux-specific) */
-};
-
 int main(int argc, char* argv[]) {
     key_t shmkey;
     key_t semkey;
@@ -107,37 +119,32 @@ int main(int argc, char* argv[]) {
     errno = 0; /* recommendation from manual of strtol to check for errors */
     n = strtol(argv[2], NULL, 10);
     if (errno != 0) {
-        perror("Drugim argumentem powinnna byc liczba calkowita");
-        exit(1);
+        sys_err("Drugim argumentem powinnna byc liczba calkowita");
     }
 
     printf("[SERWER]: Twitter 2.0 (Wersja A)\n");
     printf("[SERWER]: tworze klucz na podstawie pliku %s... ", argv[1]);
     shmkey = ftok(argv[1], 1);
     if (shmkey == -1) {
-        perror("Nie udalo sie wygenerowac klucza");
-        exit(1);
+        sys_err("Nie udalo sie wygenerowac klucza");
     }
     printf("OK (klucz: %d)\n", shmkey);
 
     semkey = ftok(argv[1], 2);
     if (semkey == -1) {
-        perror("Nie udalo sie wygenerowac klucza");
-        cleanup(0);
+        sys_err_with_cleanup("Nie udalo sie wygenerowac klucza");
     }
 
     /* jeden wiecej dla kontrolowania rozmiaru i pojemnosci */
     if ((semid = semget(semkey, n + 1, 0666 | IPC_CREAT)) == -1) {
-        perror("Nie mozna utworzyc zbioru semafor");
-        cleanup(0);
+        sys_err_with_cleanup("Nie mozna utworzyc zbioru semafor");
     }
 
     semval.val = 1;
 
     for (i = 0; i < n + 1; ++i) { /* + 1 zeby zainicjalizowac tez rozmiar */
         if (semctl(semid, i, SETVAL, semval) == -1) {
-            perror("Nie mozna zainicjalizowac semafory");
-            cleanup(0);
+            sys_err_with_cleanup("Nie mozna zainicjalizowac semafory");
         }
     }
 
@@ -146,22 +153,20 @@ int main(int argc, char* argv[]) {
     shmid = shmget(shmkey, sizeof(*twitter) + n * sizeof(*twitter->posts),
                    IPC_CREAT | 0666);
     if (shmid == -1) {
-        perror("Nie udalo sie utworzyc segment pamieci dzielonej");
-        exit(1);
+        sys_err("Nie udalo sie utworzyc segment pamieci dzielonej");
     }
 
     /* zaladuj informacje a segmencie pamieci dzielonej */
     if (shmctl(shmid, IPC_STAT, &shmds) == -1) {
-        perror("Nie mozna odczytac informacji o pamieci wspoldzielonej");
-        cleanup(0);
+        sys_err_with_cleanup(
+            "Nie mozna odczytac informacji o pamieci wspoldzielonej");
     }
     printf("OK (id: %d, rozmiar: %ld)\n", shmid, shmds.shm_segsz);
 
     printf("[SERWER]: dolaczam pamiec wspolna... ");
     twitter = shmat(shmid, NULL, 0);
     if (twitter == (void*)-1) {
-        perror("Nie mozna dolaczyc segmentu pamieci");
-        cleanup(0);
+        sys_err_with_cleanup("Nie mozna dolaczyc segmentu pamieci");
     }
     twitter->capacity = n; /* set twitter capacity */
 
