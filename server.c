@@ -27,6 +27,7 @@ void print_posts(int sig) {
     struct sembuf free_size = {*capacity, 1, 0};
     struct sembuf alloc_record = {0, -1, 0};
     struct sembuf free_record = {0, 1, 0};
+    int i;
 
     printf("\n");
 
@@ -39,7 +40,7 @@ void print_posts(int sig) {
         printf("Brak wpisow\n");
     } else {
         printf("_____________  Twitter 2.0:  _____________\n");
-        for (int i = 0; i < *size; ++i) {
+        for (i = 0; i < *size; ++i) {
             alloc_record.sem_num = free_record.sem_num = i;
 
             if (semop(semid, &alloc_record, 1) == -1) {
@@ -73,6 +74,7 @@ void cleanup(int sig) {
     exit(0);
 }
 
+/* this structure was copied from semctl(2) manual */
 union semun {
     int val;               /* Value for SETVAL */
     struct semid_ds* buf;  /* Buffer for IPC_STAT, IPC_SET */
@@ -82,11 +84,12 @@ union semun {
 };
 
 int main(int argc, char* argv[]) {
-    key_t shmkey;  // klucz pamieci wspoldzielonej
-    key_t semkey;  // klucz semafory
+    key_t shmkey;
+    key_t semkey;
     int n;
     struct shmid_ds shmds;
     union semun semval;
+    int i;
 
     signal(SIGTSTP, print_posts);
     signal(SIGINT, cleanup);
@@ -96,10 +99,10 @@ int main(int argc, char* argv[]) {
         exit(1);
     }
 
-    errno = 0;  // zalecenie z notatki w manualu
+    errno = 0; /* recommendation from manual of strtol to check for errors */
     n = strtol(argv[2], NULL, 10);
     if (errno != 0) {
-        perror("Drugim argumentem powinien byc int");
+        perror("Drugim argumentem powinnna byc liczba calkowita");
         exit(1);
     }
 
@@ -118,14 +121,15 @@ int main(int argc, char* argv[]) {
         cleanup(0);
     }
 
-    // jeden wiecej dla kontrolowania rozmiaru i pojemnosci
+    /* jeden wiecej dla kontrolowania rozmiaru i pojemnosci */
     if ((semid = semget(semkey, n + 1, 0666 | IPC_CREAT)) == -1) {
         perror("Nie mozna utworzyc zbioru semafor");
         cleanup(0);
     }
 
     semval.val = 1;
-    for (int i = 0; i < n + 1; ++i) {  // + 1 zeby zainicjalizowac tez rozmiar
+
+    for (i = 0; i < n + 1; ++i) {  /* + 1 zeby zainicjalizowac tez rozmiar */
         if (semctl(semid, i, SETVAL, semval) == -1) {
             perror("Nie mozna zainicjalizowac semafory");
             cleanup(0);
@@ -141,7 +145,7 @@ int main(int argc, char* argv[]) {
         exit(1);
     }
 
-    // zaladuj informacje a segmencie pamieci dzielonej
+    /* zaladuj informacje a segmencie pamieci dzielonej */
     if (shmctl(shmid, IPC_STAT, &shmds) == -1) {
         perror("Nie mozna odczytac informacji o pamieci wspoldzielonej");
         cleanup(0);
@@ -157,14 +161,14 @@ int main(int argc, char* argv[]) {
         perror("Nie mozna dolaczyc segmentu pamieci");
         cleanup(0);
     }
-    *capacity = n;  // ustaw pojemnosc twittera
+    *capacity = n;  /* set twitter capacity */
 
     printf("OK (adres: %lu)\n", (long)records);
     printf("[SERWER]: nacisnij Ctrl^Z by wyswietlic stan serwisu\n");
     printf("[SERWER]: nacisnij Ctrl^C by zakonczyc program\n");
 
     while (1) {
-        // zacznij czekac na sygnaly
+        /* wait for signals */
     }
 
     return 0;

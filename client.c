@@ -16,24 +16,28 @@ struct Record {
     int likes;
 };
 
+/* reads line without new line character to buff (at most size - 1 characters)
+returns length of string that was read */
 int readline(char* buff, int size) {
     fgets(buff, size, stdin);
     int len = strlen(buff);
-    buff[--len] = 0;  // nadpisz znak nowej lini znakiem null
+    buff[--len] = 0; /* overwrite new line character */
 
     return len;
 }
 
+/* print usage and exit */
 void usage(const char* progname) {
     fprintf(stderr, "usage: %s <key> <username>\n", progname);
     exit(1);
 }
 
 int main(int argc, char* argv[]) {
+    key_t shmkey;
+    key_t semkey;
     int shmid;
     int semid;
-    key_t shmkey;  // klucz pamieci wspoldzielonej
-    key_t semkey;  // klucz semafory
+    int i;
 
     char action;
     int* size;
@@ -84,14 +88,14 @@ int main(int argc, char* argv[]) {
     }
 
     printf("[Wolnych %d wpisow (na %d)]\n", *capacity - *size, *capacity);
-    int local_size = *size;  // zapisz do lokalnej zmiennej
+    int local_size = *size; /* save to local variable */
 
     if (semop(semid, &free_size, 1) == -1) {
         perror("Nie mozna zwolnic zasobu");
         exit(1);
     }
 
-    for (int i = 0; i < local_size; ++i) {
+    for (i = 0; i < local_size; ++i) {
         alloc_post.sem_num = free_post.sem_num = i;
         if (semop(semid, &alloc_post, 1)) {
             perror("Nie mozna zajac zasobu");
@@ -110,7 +114,7 @@ int main(int argc, char* argv[]) {
     printf("Podaj akcje (N)owy wpis, (L)ike\n");
     printf("> ");
     scanf(" %c", &action);
-    while (getchar() != '\n')  // ignoruj znaki az do wejscia
+    while (getchar() != '\n') /* ignore rest of line */
         ;
 
     if (action == 'N' || action == 'n') {
@@ -151,7 +155,7 @@ int main(int argc, char* argv[]) {
         int post_index;
         printf("Ktory wpis chcesz polubic\n> ");
         scanf(" %d", &post_index);
-        post_index -= 1;  // C arrays are 0 indexed
+        post_index -= 1; /* C arrays are 0 indexed */
 
         if (semop(semid, &alloc_size, 1)) {
             perror("Nie mozna zajac zasobu");
