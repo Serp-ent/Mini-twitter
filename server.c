@@ -6,8 +6,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/shm.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #define USERNAME_SIZE 32
 #define POST_SIZE 64
@@ -117,6 +119,9 @@ int semset_unlink(const char* key, int nsem) {
 }
 
 void cleanup(int sig) {
+    char shmname[NAME_MAX] = "/";
+    strncat(shmname, keyfile, NAME_MAX - 2);  // null and leading slash
+
     printf("[SERWER]: dostalem SIGINT => koncze i sprzatam...\n");
 
     printf("semafory: odlaczanie: %s, ",
@@ -124,14 +129,17 @@ void cleanup(int sig) {
                                                           : strerror(errno));
     free(semset);
     printf("Zwolniono pamiec, ");
-
     printf("usuwanie semafor: %s\n",
            (semset_unlink(keyfile, twitter->capacity) == 0) ? "OK"
                                                             : strerror(errno));
 
-    printf("shared memory: odlaczanie: %s, usuniecie: %s\n",
-           (shmdt(twitter) == 0) ? "OK" : strerror(errno),
-           (shmctl(shmid, IPC_RMID, 0) == 0) ? "OK" : strerror(errno));
+    printf(
+        "shared memory: odlaczanie: %s, usuniecie: %s\n",
+        (munmap(twitter, sizeof(*twitter) +
+                             twitter->capacity * sizeof(*twitter->posts)) == 0)
+            ? "OK"
+            : strerror(errno),
+        (shm_unlink(shmname) == 0) ? "OK" : strerror(errno));
 
     exit(EXIT_SUCCESS);
 }
@@ -168,42 +176,49 @@ sem_t** create_semset(int nsem, const char* key) {
 }
 
 int create_shm(int nposts, const char* key, int id) {
-    key_t shmkey;
-    int sid;
+    int shmfd;
+    char name[NAME_MAX] = "/";
 
     printf("[SERWER]: tworze klucz na podstawie pliku %s... ", key);
-    shmkey = ftok(key, id);
-    if (shmkey == -1) {
-        sys_err("Nie udalo sie wygenerowac klucza dla pamieci dzielonej");
-    }
-    printf("OK (klucz: %d)\n", shmkey);
-    printf("[SERWER]: Tworze segment pamieci wspolnej na %d wpisow po %lub... ",
-           nposts, sizeof(*twitter->posts));
-    sid = shmget(shmkey, sizeof(*twitter) + nposts * sizeof(*twitter->posts),
-                 IPC_CREAT | 0666);
-    if (sid == -1) {
-        sys_err("Nie udalo sie utworzyc segment pamieci dzielonej");
+    strncat(name, key, NAME_MAX - 2);  // null and leading slash
+    printf("OK (klucz: %s)\n", name);
+
+    printf(
+        "[SERWER]: Tworze segment pamieci wspoldzielonej na %d wpisow po "
+        "%lub... ",
+        nposts, sizeof(*twitter->posts));
+
+    shmfd = shm_open(name, O_RDWR | O_CREAT, 0666);
+    if (shmfd == -1) {
+        sys_err("Nie udalo sie utworzyc pamieci dzielonej dla podanego klucza");
     }
 
-    return sid;
+    // set size of shared memory object
+    if (ftruncate(shmfd, sizeof(*twitter) + nposts * sizeof(*twitter->posts)) ==
+        -1) {
+        sys_err("Nie mozna ustawic rozmiaru pamieci wspoldzielonej");
+    }
+
+    return shmfd;
 }
 
-void print_shminfo(int shm) {
-    struct shmid_ds shmds;
+void print_shminfo(int shmfd) {
+    struct stat shminfo;
 
     /* zaladuj informacje a segmencie pamieci dzielonej */
-    if (shmctl(shm, IPC_STAT, &shmds) == -1) {
+    if (fstat(shmfd, &shminfo) == -1) {
         sys_err_with_cleanup(
             "Nie mozna odczytac informacji o pamieci wspoldzielonej");
     }
-    printf("OK (id: %d, rozmiar: %ld)\n", shmid, shmds.shm_segsz);
+    printf("OK (id: %d, rozmiar: %ld)\n", shmid, shminfo.st_size);
 }
 
 struct Twitter* init_twitter(int shmid, int maxposts) {
     struct Twitter* t;
     printf("[SERWER]: dolaczam pamiec wspolna... ");
-    t = shmat(shmid, NULL, 0);
-    if (t == (void*)-1) {
+    t = mmap(NULL, sizeof(*twitter) + maxposts * sizeof(*twitter->posts),
+             PROT_READ | PROT_WRITE, MAP_SHARED, shmid, 0);
+    if (t == MAP_FAILED) {
         sys_err_with_cleanup("Nie mozna dolaczyc segmentu pamieci");
     }
 
@@ -239,6 +254,7 @@ int main(int argc, char* argv[]) {
     semset = create_semset(nposts, keyfile);
 
     twitter = init_twitter(shmid, nposts);
+    close(shmid);  // after mmap no needed
 
     printf("[SERWER]: nacisnij Ctrl^Z by wyswietlic stan serwisu\n");
     printf("[SERWER]: nacisnij Ctrl^C by zakonczyc program\n");
