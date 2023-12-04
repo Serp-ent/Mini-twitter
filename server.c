@@ -97,7 +97,7 @@ void cleanup(int sig) {
            (shmctl(shmid, IPC_RMID, 0) == 0) ? "OK" : strerror(errno));
     printf("usuwanie semafor: %s\n",
            (semctl(semid, IPC_RMID, 0) == 0) ? "OK" : strerror(errno));
-    exit(0);
+    exit(EXIT_SUCCESS);
 }
 
 int init_semset(int nsem, char* keyfile, int id) {
@@ -126,57 +126,78 @@ int init_semset(int nsem, char* keyfile, int id) {
     return semsetid;
 }
 
-int main(int argc, char* argv[]) {
+int create_shm(int nposts, char* keyfile, int id) {
     key_t shmkey;
-    int n;
-    struct shmid_ds shmds;
+    int sid;
 
-    signal(SIGTSTP, print_posts);
-    signal(SIGINT, cleanup);
-
-    if (argc != 3) {
-        fprintf(stderr, "uzycie: %s, <klucz> <liczba wpisow>\n", argv[0]);
-        exit(1);
-    }
-
-    errno = 0; /* recommendation from manual of strtol to check for errors */
-    n = strtol(argv[2], NULL, 10);
-    if (errno != 0) {
-        sys_err("Drugim argumentem powinnna byc liczba calkowita");
-    }
-
-    printf("[SERWER]: Twitter 2.0 (Wersja A)\n");
-    printf("[SERWER]: tworze klucz na podstawie pliku %s... ", argv[1]);
-    shmkey = ftok(argv[1], 1);
+    printf("[SERWER]: tworze klucz na podstawie pliku %s... ", keyfile);
+    shmkey = ftok(keyfile, id);
     if (shmkey == -1) {
         sys_err("Nie udalo sie wygenerowac klucza dla pamieci dzielonej");
     }
     printf("OK (klucz: %d)\n", shmkey);
     printf("[SERWER]: Tworze segment pamieci wspolnej na %d wpisow po %lub... ",
-           n, sizeof(struct Record));
-    shmid = shmget(shmkey, sizeof(*twitter) + n * sizeof(*twitter->posts),
-                   IPC_CREAT | 0666);
-    if (shmid == -1) {
+           nposts, sizeof(*twitter->posts));
+    sid = shmget(shmkey, sizeof(*twitter) + nposts * sizeof(*twitter->posts),
+                 IPC_CREAT | 0666);
+    if (sid == -1) {
         sys_err("Nie udalo sie utworzyc segment pamieci dzielonej");
     }
 
+    return sid;
+}
+
+void print_shminfo(int shm) {
+    struct shmid_ds shmds;
+
     /* zaladuj informacje a segmencie pamieci dzielonej */
-    if (shmctl(shmid, IPC_STAT, &shmds) == -1) {
+    if (shmctl(shm, IPC_STAT, &shmds) == -1) {
         sys_err_with_cleanup(
             "Nie mozna odczytac informacji o pamieci wspoldzielonej");
     }
     printf("OK (id: %d, rozmiar: %ld)\n", shmid, shmds.shm_segsz);
+}
 
-    semid = init_semset(n, argv[1], 2);
-
+struct Twitter* init_twitter(int shmid, int maxposts) {
+    struct Twitter* t;
     printf("[SERWER]: dolaczam pamiec wspolna... ");
-    twitter = shmat(shmid, NULL, 0);
-    if (twitter == (void*)-1) {
+    t = shmat(shmid, NULL, 0);
+    if (t == (void*)-1) {
         sys_err_with_cleanup("Nie mozna dolaczyc segmentu pamieci");
     }
-    twitter->capacity = n; /* set twitter capacity */
 
-    printf("OK (adres: %lu)\n", (long)twitter);
+    t->capacity = maxposts; /* set twitter capacity */
+    t->size = 0;            /* no posts by default */
+
+    printf("OK (adres: %p)\n", t);
+
+    return t;
+}
+
+int main(int argc, char* argv[]) {
+    int nposts;
+
+    signal(SIGTSTP, print_posts);
+    signal(SIGINT, cleanup);
+
+    if (argc != 3) {
+        fprintf(stderr, "uzycie: %s <klucz> <liczba wpisow>\n", argv[0]);
+        exit(EXIT_FAILURE);
+    }
+    errno = 0; /* recommendation from manual of strtol to check for errors */
+    nposts = strtol(argv[2], NULL, 10);
+    if (errno != 0) {
+        sys_err("Drugim argumentem powinnna byc liczba calkowita");
+    }
+
+    printf("[SERWER]: Twitter 2.0 (Wersja A)\n");
+    shmid = create_shm(nposts, argv[1], 1);
+    print_shminfo(shmid);
+
+    semid = init_semset(nposts, argv[1], 2);
+
+    twitter = init_twitter(shmid, nposts);
+
     printf("[SERWER]: nacisnij Ctrl^Z by wyswietlic stan serwisu\n");
     printf("[SERWER]: nacisnij Ctrl^C by zakonczyc program\n");
 
