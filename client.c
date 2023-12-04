@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <linux/limits.h>
 #include <semaphore.h>
 #include <signal.h>
@@ -6,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ipc.h>
-#include <sys/shm.h>
+#include <sys/mman.h>
 
 #define USERNAME_SIZE 32
 #define POST_SIZE 64
@@ -44,24 +45,20 @@ void usage(const char* progname) {
     exit(1);
 }
 
-int connect_to_shm(const char* keyfile, int id) {
-    key_t shmkey;
-    int shmid;
-    if ((shmkey = ftok(keyfile, id)) == -1) {
-        sys_err("Nie udalo sie wygenerowac klucza");
-    }
-
-    if ((shmid = shmget(shmkey, 0, 0)) == -1) {
-        sys_err("Nie udalo sie uzyskac id segmentu pamieci dzielonej");
-    }
-
-    return shmid;
-}
-
 struct Twitter* connect_to_twitter(int shmid) {
     struct Twitter* t;
-    if ((t = shmat(shmid, NULL, 0)) == (void*)-1) {
-        sys_err("Nie mozna dolaczyc pamieci");
+
+    t = mmap(NULL, sizeof(*twitter), PROT_READ | PROT_WRITE, MAP_SHARED, shmid,
+             0);
+    if (t == MAP_FAILED) {
+        sys_err("Nie mozna dolaczyc segmentu pamieci");
+    }
+
+    int nposts = t->capacity;  // remap to adjust size
+    t = mmap(NULL, sizeof(*twitter) + nposts * sizeof(*twitter->posts),
+             PROT_READ | PROT_WRITE, MAP_SHARED, shmid, 0);
+    if (t == MAP_FAILED) {
+        sys_err("Nie mozna dolaczyc segmentu pamieci");
     }
 
     return t;
@@ -111,6 +108,19 @@ int semset_close(sem_t** semset, int nsem) {
     return 0;
 }
 
+int connect_to_shm(const char* key) {
+    int shmfd;
+    char name[NAME_MAX] = "/";
+
+    strncat(name, key, NAME_MAX - 2);  // null and leading slash
+    shmfd = shm_open(name, O_RDWR, 0);
+    if (shmfd == -1) {
+        sys_err("Nie udalo sie utworzyc pamieci dzielonej dla podanego klucza");
+    }
+
+    return shmfd;
+}
+
 int main(int argc, char* argv[]) {
     int shmid;
     sem_t** semset;
@@ -123,7 +133,7 @@ int main(int argc, char* argv[]) {
         usage(argv[0]);
     }
 
-    shmid = connect_to_shm(argv[1], 1);
+    shmid = connect_to_shm(argv[1]);
     twitter = connect_to_twitter(shmid);
 
     semset = connect_to_semset(twitter->capacity, argv[1]);
@@ -229,7 +239,8 @@ int main(int argc, char* argv[]) {
 
     free(semset);
 
-    if (shmdt(twitter) == -1) {
+    if (munmap(twitter, sizeof(*twitter) + twitter->capacity *
+                                               sizeof(*twitter->posts)) == -1) {
         perror("Nie udalo sie odlaczyc pamieci wspoldzielonej");
     }
 

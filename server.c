@@ -225,7 +225,7 @@ struct Twitter* init_twitter(int shmid, int maxposts) {
     t->capacity = maxposts; /* set twitter capacity */
     t->size = 0;            /* no posts by default */
 
-    printf("OK (adres: %p)\n", t);
+    printf("OK (adres: %p)\n", (void*)t);
 
     return t;
 }
