@@ -117,64 +117,72 @@ int main(int argc, char* argv[]) {
     while (getchar() != '\n') /* ignore rest of line */
         ;
 
-    if (action == 'N' || action == 'n') {
-        char buff[POST_SIZE];
-        printf("Napisz co ci chodzi po glowie:\n> ");
-        readline(buff, POST_SIZE);
+    switch (action) {
+        case 'n':
+        case 'N': {
+            char buff[POST_SIZE];
+            printf("Napisz co ci chodzi po glowie:\n> ");
+            readline(buff, POST_SIZE);
 
-        if (semop(semid, &alloc_size, 1)) {
-            sys_err("Nie mozna zajac zasobu");
-        }
-
-        if (twitter->size == twitter->capacity) {
-            fprintf(stderr, "Brak miejsca na nowe wiadomosci\n");
-        } else {
-            alloc_post.sem_num = free_post.sem_num = twitter->size;
-            if (semop(semid, &alloc_post, 1) == -1) {
+            if (semop(semid, &alloc_size, 1)) {
                 sys_err("Nie mozna zajac zasobu");
             }
-            strncpy(twitter->posts[twitter->size].username, argv[2],
-                    USERNAME_SIZE);
-            strncpy(twitter->posts[twitter->size].post, buff, POST_SIZE);
-            twitter->posts[twitter->size].likes = 0;
 
-            ++twitter->size;
-            if (semop(semid, &free_post, 1) == -1) {
+            if (twitter->size == twitter->capacity) {
+                fprintf(stderr, "Brak miejsca na nowe wiadomosci\n");
+            } else {
+                alloc_post.sem_num = free_post.sem_num = twitter->size;
+                if (semop(semid, &alloc_post, 1) == -1) {
+                    sys_err("Nie mozna zajac zasobu");
+                }
+                strncpy(twitter->posts[twitter->size].username, argv[2],
+                        USERNAME_SIZE);
+                strncpy(twitter->posts[twitter->size].post, buff, POST_SIZE);
+                twitter->posts[twitter->size].likes = 0;
+
+                ++twitter->size;
+                if (semop(semid, &free_post, 1) == -1) {
+                    sys_err("Nie mozna zwolnic zasobu");
+                }
+            }
+
+            if (semop(semid, &free_size, 1) == -1) {
                 sys_err("Nie mozna zwolnic zasobu");
             }
-        }
 
-        if (semop(semid, &free_size, 1) == -1) {
-            sys_err("Nie mozna zwolnic zasobu");
-        }
+        } break;
+        case 'l':
+        case 'L': {
+            int post_index;
+            printf("Ktory wpis chcesz polubic\n> ");
+            scanf(" %d", &post_index);
+            post_index -= 1; /* C arrays are 0 indexed */
 
-    } else if (action == 'L' || action == 'l') {
-        int post_index;
-        printf("Ktory wpis chcesz polubic\n> ");
-        scanf(" %d", &post_index);
-        post_index -= 1; /* C arrays are 0 indexed */
-
-        if (semop(semid, &alloc_size, 1)) {
-            sys_err("Nie mozna zajac zasobu");
-        }
-        if (post_index >= twitter->size || post_index < 0) {
-            printf("Nie ma wpisu o takim indexie\n");
-        } else {
-            alloc_post.sem_num = free_post.sem_num = post_index;
-            if (semop(semid, &alloc_post, 1)) {
+            if (semop(semid, &alloc_size, 1)) {
                 sys_err("Nie mozna zajac zasobu");
             }
-            ++twitter->posts[post_index].likes;
-            if (semop(semid, &free_post, 1)) {
+            if (post_index >= twitter->size || post_index < 0) {
+                printf("Nie ma wpisu o takim indexie\n");
+            } else {
+                alloc_post.sem_num = free_post.sem_num = post_index;
+                if (semop(semid, &alloc_post, 1)) {
+                    sys_err("Nie mozna zajac zasobu");
+                }
+                ++twitter->posts[post_index].likes;
+                if (semop(semid, &free_post, 1)) {
+                    sys_err("Nie mozna zwolnic zasobu");
+                }
+            }
+            if (semop(semid, &free_size, 1) == -1) {
                 sys_err("Nie mozna zwolnic zasobu");
             }
-        }
-        if (semop(semid, &free_size, 1) == -1) {
-            sys_err("Nie mozna zwolnic zasobu");
-        }
+        } break;
+        default:
+            printf("niepoprawna akcja\n");
+    }
 
-    } else {
-        printf("niepoprawna akcja\n");
+    if (shmdt(twitter) == -1) {
+        perror("Nie udalo sie odlaczyc pamieci wspoldzielonej");
     }
 
     printf("Dziekuje za skorzystanie z aplikacji Twitter 2.0\n\n");
