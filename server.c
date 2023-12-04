@@ -124,6 +124,7 @@ void cleanup(int sig) {
                                                           : strerror(errno));
     free(semset);
     printf("Zwolniono pamiec, ");
+
     printf("usuwanie semafor: %s\n",
            (semset_unlink(keyfile, twitter->capacity) == 0) ? "OK"
                                                             : strerror(errno));
@@ -131,13 +132,12 @@ void cleanup(int sig) {
     printf("shared memory: odlaczanie: %s, usuniecie: %s\n",
            (shmdt(twitter) == 0) ? "OK" : strerror(errno),
            (shmctl(shmid, IPC_RMID, 0) == 0) ? "OK" : strerror(errno));
-    // TODO: cleanup
 
     exit(EXIT_SUCCESS);
 }
 
 // WARNING: returned semaphore set should be freed
-sem_t** create_semset(int nsem, const char* key, int id) {
+sem_t** create_semset(int nsem, const char* key) {
     sem_t** semset;
     int i;
 
@@ -236,7 +236,7 @@ int main(int argc, char* argv[]) {
     shmid = create_shm(nposts, keyfile, 1);
     print_shminfo(shmid);
 
-    semset = create_semset(nposts, keyfile, 2);
+    semset = create_semset(nposts, keyfile);
 
     twitter = init_twitter(shmid, nposts);
 

@@ -1,10 +1,11 @@
 #include <errno.h>
+#include <linux/limits.h>
+#include <semaphore.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ipc.h>
-#include <sys/sem.h>
 #include <sys/shm.h>
 
 #define USERNAME_SIZE 32
@@ -66,31 +67,56 @@ struct Twitter* connect_to_twitter(int shmid) {
     return t;
 }
 
-int connect_to_semset(const char* keyfile, int id) {
-    key_t semkey;
-    int semid;
+// WARNING: returned semaphore set should be freed
+sem_t** connect_to_semset(int nsem, const char* key) {
+    sem_t** semset;
+    int i;
 
-    if ((semkey = ftok(keyfile, id)) == -1) {
-        sys_err("Nie udalo sie wygenerowac klucza");
-    }
-    if ((semid = semget(semkey, 0, 0)) == -1) {
-        sys_err("Nie mozna uzyskac dostepu do semafory");
+    if ((semset = calloc(nsem + 1, sizeof(sem_t*))) == NULL) {
+        sys_err("Can't alloc memory for semaphore set");
     }
 
-    return semid;
+    char name[NAME_MAX] = "/";
+    strcat(name, key);
+    char* semnum = name + strlen(name);
+
+    for (i = 0; i < nsem; ++i) {
+        sprintf(semnum, "%d", i);
+        semset[i] = sem_open(name, 0);
+        if (semset[i] == SEM_FAILED) {
+            sys_err(name);
+        }
+    }
+
+    // INFO: special semaphore to reserve size
+    strcpy(semnum, "size");
+    semset[nsem] = sem_open(name, 0);
+    if (semset[nsem] == SEM_FAILED) {
+        sys_err(name);
+    }
+
+    return semset;
+}
+
+int semset_close(sem_t** semset, int nsem) {
+    // TODO: on error try to close rest of semaphores
+    // +1 because on this pos we hold size
+    int i;
+    for (i = 0; i < nsem + 1; ++i) {
+        if (sem_close(semset[i]) == -1) {
+            return -1;
+        }
+    }
+
+    return 0;
 }
 
 int main(int argc, char* argv[]) {
     int shmid;
-    int semid;
+    sem_t** semset;
     int i;
 
     char action;
-
-    struct sembuf alloc_size = {0, -1, 0};
-    struct sembuf free_size = {0, 1, 0};
-    struct sembuf alloc_post = {0, -1, 0};
-    struct sembuf free_post = {0, 1, 0};
 
     struct Twitter* twitter;
     if (argc != 3) {
@@ -98,37 +124,38 @@ int main(int argc, char* argv[]) {
     }
 
     shmid = connect_to_shm(argv[1], 1);
-    semid = connect_to_semset(argv[1], 2);
-
     twitter = connect_to_twitter(shmid);
-    alloc_size.sem_num = free_size.sem_num = twitter->capacity;
+
+    semset = connect_to_semset(twitter->capacity, argv[1]);
 
     printf("Twitter 2.0 wita! (WERSJA A)\n");
 
-    if (semop(semid, &alloc_size, 1)) {
-        sys_err("Nie mozna zajac zasobu");
+    if (sem_wait(semset[twitter->capacity]) == -1) {
+        sys_err("Nie mozna zajac rozmiaru");
     }
 
-    printf("[Wolnych %d wpisow (na %d)]\n", twitter->capacity - twitter->size,
-           twitter->capacity);
-    int local_size = twitter->size; /* save to local variable */
+    /* save to local variable */
+    int local_capacity = twitter->capacity;
+    int local_size = twitter->size;
 
-    if (semop(semid, &free_size, 1) == -1) {
-        sys_err("Nie mozna zwolnic zasobu");
+    if (sem_post(semset[twitter->capacity]) == -1) {
+        sys_err("Nie mozna zwolnic rozmiaru");
     }
+
+    printf("[Wolnych %d wpisow (na %d)]\n", local_capacity - local_size,
+           local_capacity);
 
     for (i = 0; i < local_size; ++i) {
-        alloc_post.sem_num = free_post.sem_num = i;
-        if (semop(semid, &alloc_post, 1)) {
-            sys_err("Nie mozna zajac zasobu");
+        if (sem_post(semset[i]) == -1) {
+            sys_err("Nie mozna zarezerwowac postu");
         }
 
         printf("%d. %s [Autor: %s, Polubienia: %d]\n", i + 1,
                twitter->posts[i].post, twitter->posts[i].username,
                twitter->posts[i].likes);
 
-        if (semop(semid, &free_post, 1) == -1) {
-            sys_err("Nie mozna zwolnic zasobu");
+        if (sem_post(semset[i]) == -1) {
+            sys_err("Nie mozna oddac postu");
         }
     }
 
@@ -142,30 +169,31 @@ int main(int argc, char* argv[]) {
         printf("Napisz co ci chodzi po glowie:\n> ");
         readline(buff, POST_SIZE);
 
-        if (semop(semid, &alloc_size, 1)) {
-            sys_err("Nie mozna zajac zasobu");
+        if (sem_wait(semset[twitter->capacity]) == -1) {
+            sys_err("Nie mozna zarezerwowac rozmiaru");
         }
 
         if (twitter->size == twitter->capacity) {
             fprintf(stderr, "Brak miejsca na nowe wiadomosci\n");
         } else {
-            alloc_post.sem_num = free_post.sem_num = twitter->size;
-            if (semop(semid, &alloc_post, 1) == -1) {
-                sys_err("Nie mozna zajac zasobu");
+            if (sem_post(semset[i]) == -1) {
+                sys_err("Nie mozna zarezerwowac postu");
             }
+
             strncpy(twitter->posts[twitter->size].username, argv[2],
                     USERNAME_SIZE);
             strncpy(twitter->posts[twitter->size].post, buff, POST_SIZE);
             twitter->posts[twitter->size].likes = 0;
 
             ++twitter->size;
-            if (semop(semid, &free_post, 1) == -1) {
-                sys_err("Nie mozna zwolnic zasobu");
+
+            if (sem_post(semset[i]) == -1) {
+                sys_err("Nie mozna oddac postu");
             }
         }
 
-        if (semop(semid, &free_size, 1) == -1) {
-            sys_err("Nie mozna zwolnic zasobu");
+        if (sem_post(semset[twitter->capacity]) == -1) {
+            sys_err("Nie mozna zwolnic rozmiaru");
         }
     } else if (action == 'l' || action == 'L') {
         int post_index;
@@ -173,27 +201,33 @@ int main(int argc, char* argv[]) {
         scanf(" %d", &post_index);
         post_index -= 1; /* C arrays are 0 indexed */
 
-        if (semop(semid, &alloc_size, 1)) {
-            sys_err("Nie mozna zajac zasobu");
+        if (sem_wait(semset[twitter->capacity]) == -1) {
+            sys_err("Nie mozna zarezerwowac rozmiaru");
         }
+
         if (post_index >= twitter->size || post_index < 0) {
             printf("Nie ma wpisu o takim indexie\n");
         } else {
-            alloc_post.sem_num = free_post.sem_num = post_index;
-            if (semop(semid, &alloc_post, 1)) {
-                sys_err("Nie mozna zajac zasobu");
+            if (sem_post(semset[i]) == -1) {
+                sys_err("Nie mozna zarezerwowac postu");
             }
             ++twitter->posts[post_index].likes;
-            if (semop(semid, &free_post, 1)) {
-                sys_err("Nie mozna zwolnic zasobu");
+            if (sem_post(semset[i]) == -1) {
+                sys_err("Nie mozna oddac postu");
             }
         }
-        if (semop(semid, &free_size, 1) == -1) {
-            sys_err("Nie mozna zwolnic zasobu");
+        if (sem_post(semset[twitter->capacity]) == -1) {
+            sys_err("Nie mozna zwolnic rozmiaru");
         }
     } else {
         printf("niepoprawna akcja\n");
     }
+
+    if (semset_close(semset, twitter->capacity) == -1) {
+        perror("Nie udalo sie zamknac wszystkich semafor");
+    }
+
+    free(semset);
 
     if (shmdt(twitter) == -1) {
         perror("Nie udalo sie odlaczyc pamieci wspoldzielonej");
