@@ -100,13 +100,36 @@ void cleanup(int sig) {
     exit(0);
 }
 
+int init_semset(int nsem, char* keyfile, int id) {
+    key_t semkey;
+    int semsetid;
+    int i;
+
+    union semun semval;
+    semval.val = 1;
+
+    if ((semkey = ftok(keyfile, id)) == -1) {
+        sys_err_with_cleanup("Nie udalo sie wygenerowac klucza dla semafory");
+    }
+
+    /* jeden wiecej dla kontrolowania rozmiaru i pojemnosci */
+    if ((semsetid = semget(semkey, nsem + 1, 0666 | IPC_CREAT)) == -1) {
+        sys_err_with_cleanup("Nie mozna utworzyc zbioru semafor");
+    }
+
+    for (i = 0; i < nsem + 1; ++i) { /* + 1 zeby zainicjalizowac tez rozmiar */
+        if (semctl(semsetid, i, SETVAL, semval) == -1) {
+            sys_err_with_cleanup("Nie mozna zainicjalizowac semafory");
+        }
+    }
+
+    return semsetid;
+}
+
 int main(int argc, char* argv[]) {
     key_t shmkey;
-    key_t semkey;
     int n;
     struct shmid_ds shmds;
-    union semun semval;
-    int i;
 
     signal(SIGTSTP, print_posts);
     signal(SIGINT, cleanup);
@@ -126,28 +149,9 @@ int main(int argc, char* argv[]) {
     printf("[SERWER]: tworze klucz na podstawie pliku %s... ", argv[1]);
     shmkey = ftok(argv[1], 1);
     if (shmkey == -1) {
-        sys_err("Nie udalo sie wygenerowac klucza");
+        sys_err("Nie udalo sie wygenerowac klucza dla pamieci dzielonej");
     }
     printf("OK (klucz: %d)\n", shmkey);
-
-    semkey = ftok(argv[1], 2);
-    if (semkey == -1) {
-        sys_err_with_cleanup("Nie udalo sie wygenerowac klucza");
-    }
-
-    /* jeden wiecej dla kontrolowania rozmiaru i pojemnosci */
-    if ((semid = semget(semkey, n + 1, 0666 | IPC_CREAT)) == -1) {
-        sys_err_with_cleanup("Nie mozna utworzyc zbioru semafor");
-    }
-
-    semval.val = 1;
-
-    for (i = 0; i < n + 1; ++i) { /* + 1 zeby zainicjalizowac tez rozmiar */
-        if (semctl(semid, i, SETVAL, semval) == -1) {
-            sys_err_with_cleanup("Nie mozna zainicjalizowac semafory");
-        }
-    }
-
     printf("[SERWER]: Tworze segment pamieci wspolnej na %d wpisow po %lub... ",
            n, sizeof(struct Record));
     shmid = shmget(shmkey, sizeof(*twitter) + n * sizeof(*twitter->posts),
@@ -163,6 +167,8 @@ int main(int argc, char* argv[]) {
     }
     printf("OK (id: %d, rozmiar: %ld)\n", shmid, shmds.shm_segsz);
 
+    semid = init_semset(n, argv[1], 2);
+
     printf("[SERWER]: dolaczam pamiec wspolna... ");
     twitter = shmat(shmid, NULL, 0);
     if (twitter == (void*)-1) {
@@ -174,7 +180,7 @@ int main(int argc, char* argv[]) {
     printf("[SERWER]: nacisnij Ctrl^Z by wyswietlic stan serwisu\n");
     printf("[SERWER]: nacisnij Ctrl^C by zakonczyc program\n");
 
-    while (1) {
+    for (;;) {
         /* wait for signals */
     }
 
