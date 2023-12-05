@@ -8,7 +8,6 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
-#include <sys/types.h>
 #include <unistd.h>
 
 #define USERNAME_SIZE 32
@@ -175,7 +174,7 @@ sem_t** create_semset(int nsem, const char* key) {
     return semset;
 }
 
-int create_shm(int nposts, const char* key, int id) {
+int create_shm(int nposts, const char* key) {
     int shmfd;
     char name[NAME_MAX] = "/";
 
@@ -248,7 +247,7 @@ int main(int argc, char* argv[]) {
     keyfile = argv[1];
 
     printf("[SERWER]: Twitter 2.0 (Wersja A)\n");
-    shmid = create_shm(nposts, keyfile, 1);
+    shmid = create_shm(nposts, keyfile);
     print_shminfo(shmid);
 
     semset = create_semset(nposts, keyfile);
