@@ -142,7 +142,6 @@ int main(int argc, char* argv[]) {
     if (sem_wait(semset[twitter->capacity]) == -1) {
         sys_err("Nie mozna zajac rozmiaru");
     }
-
     /* save to local variable */
     int local_capacity = twitter->capacity;
     int local_size = twitter->size;
@@ -155,7 +154,7 @@ int main(int argc, char* argv[]) {
            local_capacity);
 
     for (i = 0; i < local_size; ++i) {
-        if (sem_post(semset[i]) == -1) {
+        if (sem_wait(semset[i]) == -1) {
             sys_err("Nie mozna zarezerwowac postu");
         }
 
@@ -185,7 +184,7 @@ int main(int argc, char* argv[]) {
         if (twitter->size == twitter->capacity) {
             fprintf(stderr, "Brak miejsca na nowe wiadomosci\n");
         } else {
-            if (sem_post(semset[i]) == -1) {
+            if (sem_wait(semset[twitter->size]) == -1) {
                 sys_err("Nie mozna zarezerwowac postu");
             }
 
@@ -194,11 +193,11 @@ int main(int argc, char* argv[]) {
             strncpy(twitter->posts[twitter->size].post, buff, POST_SIZE);
             twitter->posts[twitter->size].likes = 0;
 
-            ++twitter->size;
-
-            if (sem_post(semset[i]) == -1) {
+            if (sem_post(semset[twitter->size]) == -1) {
                 sys_err("Nie mozna oddac postu");
             }
+
+            ++twitter->size;
         }
 
         if (sem_post(semset[twitter->capacity]) == -1) {
@@ -217,11 +216,11 @@ int main(int argc, char* argv[]) {
         if (post_index >= twitter->size || post_index < 0) {
             printf("Nie ma wpisu o takim indexie\n");
         } else {
-            if (sem_post(semset[i]) == -1) {
+            if (sem_wait(semset[post_index]) == -1) {
                 sys_err("Nie mozna zarezerwowac postu");
             }
             ++twitter->posts[post_index].likes;
-            if (sem_post(semset[i]) == -1) {
+            if (sem_post(semset[post_index]) == -1) {
                 sys_err("Nie mozna oddac postu");
             }
         }
