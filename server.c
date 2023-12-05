@@ -13,6 +13,8 @@
 #define USERNAME_SIZE 32
 #define POST_SIZE 64
 
+typedef sem_t* semset_t;
+
 struct Record {
     char username[USERNAME_SIZE];
     char post[POST_SIZE];
@@ -38,7 +40,7 @@ void sys_err_with_cleanup(const char* errmsg) {
 }
 
 int shmid;
-sem_t** semset;
+semset_t* semset;
 const char* keyfile;
 
 void print_posts(int sig) {
@@ -74,7 +76,7 @@ void print_posts(int sig) {
     }
 }
 
-int semset_close(sem_t** semset, int nsem) {
+int semset_close(semset_t* semset, int nsem) {
     // TODO: on error try to close rest of semaphores
     // +1 because on this pos we hold size
     int i;
@@ -144,8 +146,8 @@ void cleanup(int sig) {
 }
 
 // WARNING: returned semaphore set should be freed
-sem_t** create_semset(int nsem, const char* key) {
-    sem_t** semset;
+semset_t* create_semset(int nsem, const char* key) {
+    semset_t* semset;
     int i;
 
     if ((semset = calloc(nsem + 1, sizeof(sem_t*))) == NULL) {
